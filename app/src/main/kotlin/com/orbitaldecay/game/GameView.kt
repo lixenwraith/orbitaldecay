@@ -21,6 +21,11 @@ class GameView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
+    init {
+        // Required for setShadowLayer to work
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
+    }
+
     companion object {
         const val RING_COUNT = 9
         const val BUTTON_RADIUS_RATIO = 0.7f
@@ -93,6 +98,9 @@ class GameView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+
+        if (w == 0 || h == 0) return  // Guard against zero dimensions
+
         centerX = w / 2f
         centerY = h / 2f
 
@@ -236,7 +244,7 @@ class GameView @JvmOverloads constructor(
         canvas.drawCircle(centerX, centerY, currentButtonRadius, buttonPaint)
 
         // Draw ring number if selected
-        if (gameState.selectedRing > 0 && !gameState.isWon) {
+        if (gameState.selectedRing in 1..7 && !gameState.isWon) {
             buttonTextPaint.textSize = currentButtonRadius * 0.8f
             buttonTextPaint.color = rainbowColors[gameState.selectedRing - 1]
             buttonTextPaint.alpha = (buttonAlpha * 255).toInt()
@@ -244,6 +252,14 @@ class GameView @JvmOverloads constructor(
             // Center text vertically
             val textY = centerY - (buttonTextPaint.descent() + buttonTextPaint.ascent()) / 2f
             canvas.drawText(gameState.selectedRing.toString(), centerX, textY, buttonTextPaint)
+        } else if (gameState.selectedRing == 8 && !gameState.isWon) {
+            // Ring 8 is gray - use gray color for text
+            buttonTextPaint.textSize = currentButtonRadius * 0.8f
+            buttonTextPaint.color = 0xFFB0B0B0.toInt()
+            buttonTextPaint.alpha = (buttonAlpha * 255).toInt()
+
+            val textY = centerY - (buttonTextPaint.descent() + buttonTextPaint.ascent()) / 2f
+            canvas.drawText("8", centerX, textY, buttonTextPaint)
         } else if (gameState.isWon) {
             // Draw restart symbol
             buttonTextPaint.textSize = currentButtonRadius * 1.2f
@@ -390,7 +406,9 @@ class GameView @JvmOverloads constructor(
         // Schedule next move AFTER this animation ends
         animator.addListener(object : android.animation.AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: android.animation.Animator) {
-                postDelayed({ animateShuffle(moves, index + 1) }, SHUFFLE_MOVE_DELAY_MS - SHUFFLE_MOVE_DURATION_MS)
+                if (isAttachedToWindow) {
+                    postDelayed({ animateShuffle(moves, index + 1) }, SHUFFLE_MOVE_DELAY_MS - SHUFFLE_MOVE_DURATION_MS)
+                }
             }
         })
 
