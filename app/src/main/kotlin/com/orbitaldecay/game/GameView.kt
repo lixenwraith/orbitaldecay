@@ -91,34 +91,38 @@ class GameView @JvmOverloads constructor(
     private var lastDragX = 0f
     private var isDragging = false
 
-    init {
-        startGame()
-    }
-
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         centerX = w / 2f
         centerY = h / 2f
 
-        // Calculate radii with proper margins
         val screenMin = min(w, h).toFloat()
-        val availableRadius = screenMin / 2f - (2 * ringWidth)
-        ringWidth = availableRadius / 9f
 
-        // Calculate radii so each ring's outer edge equals next ring's inner edge
+        // Solve: outerEdge + margin = screenMin/2
+        // Ring 8 outer edge = radii[8] + ringWidth/2 = 9*ringWidth + ringWidth/2 = 9.5*ringWidth
+        // Margin = 2 * ringWidth
+        // 9.5*ringWidth + 2*ringWidth = screenMin/2
+        // 11.5*ringWidth = screenMin/2
+        ringWidth = screenMin / 23f
+
         for (i in 0..8) {
             radii[i] = ringWidth * (i + 1)
         }
 
-        // Button radius is 0.7 times the center circle radius
         buttonRadius = radii[0] * BUTTON_RADIUS_RATIO
-
-        // Update stroke width in dp
         ringPaint.strokeWidth = ringWidth
+
+        // Start game after geometry is ready (first layout only)
+        if (oldw == 0 && oldh == 0) {
+            startGame()
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
+        // Skip if layout not complete
+        if (ringWidth == 0f) return
 
         // Draw background
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
@@ -348,11 +352,9 @@ class GameView @JvmOverloads constructor(
 
     private fun animateShuffle(moves: List<Pair<Int, Float>>, index: Int) {
         if (index >= moves.size) {
-            // Shuffle complete
             gameState.isShuffling = false
             gameState.isButtonEnabled = true
 
-            // Fade in button
             val fadeAnimator = ValueAnimator.ofFloat(0f, 1f)
             fadeAnimator.duration = 300
             fadeAnimator.addUpdateListener { animator ->
@@ -365,7 +367,6 @@ class GameView @JvmOverloads constructor(
 
         val (ring, angle) = moves[index]
 
-        // Animate this move
         val animator = ValueAnimator.ofFloat(0f, angle)
         animator.duration = SHUFFLE_MOVE_DURATION_MS
         animator.interpolator = LinearInterpolator()
@@ -376,7 +377,6 @@ class GameView @JvmOverloads constructor(
             val deltaAngle = currentValue - lastValue
             lastValue = currentValue
 
-            // Apply move with propagation
             gameState.angles[ring] = gameState.normalizeAngle(gameState.angles[ring] + deltaAngle)
             if (ring > 1) {
                 gameState.angles[ring - 1] = gameState.normalizeAngle(gameState.angles[ring - 1] + deltaAngle * 0.5f)
@@ -384,15 +384,16 @@ class GameView @JvmOverloads constructor(
             if (ring < 8) {
                 gameState.angles[ring + 1] = gameState.normalizeAngle(gameState.angles[ring + 1] + deltaAngle * 0.5f)
             }
-
             invalidate()
         }
 
-        animator.start()
+        // Schedule next move AFTER this animation ends
+        animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                postDelayed({ animateShuffle(moves, index + 1) }, SHUFFLE_MOVE_DELAY_MS - SHUFFLE_MOVE_DURATION_MS)
+            }
+        })
 
-        // Schedule next move
-        postDelayed({
-            animateShuffle(moves, index + 1)
-        }, SHUFFLE_MOVE_DELAY_MS)
+        animator.start()
     }
 }
