@@ -11,9 +11,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Enable immersive mode
-        enableImmersiveMode()
-
         // Set the game view as content
         val gameView = GameView(this)
         gameView.layoutParams = android.view.ViewGroup.LayoutParams(
@@ -21,6 +18,9 @@ class MainActivity : AppCompatActivity() {
             android.view.ViewGroup.LayoutParams.MATCH_PARENT
         )
         setContentView(gameView)
+
+        // Enable immersive mode
+        enableImmersiveMode()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
