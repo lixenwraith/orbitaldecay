@@ -3,11 +3,33 @@ package com.orbitaldecay.game
 import kotlin.math.abs
 import kotlin.random.Random
 
+class ShuffleSequence(seed: Long = System.currentTimeMillis()) {
+    private val random = Random(seed)
+    private val moves = mutableListOf<Pair<Int, Float>>() // (ringIndex, angle)
+
+    fun generate(count: Int = 25): List<Pair<Int, Float>> {
+        moves.clear()
+        repeat(count) {
+            val ring = random.nextInt(1, 9)
+            val angle = (random.nextInt(4, 12) * 30f) * if (random.nextBoolean()) 1 else -1
+            // Angles: ±120°, ±150°, ±180°, ±210°, ±240°, ±270°, ±300°, ±330°
+            moves.add(ring to angle)
+        }
+        return moves
+    }
+
+    fun getReverseMoves(): List<Pair<Int, Float>> {
+        return moves.reversed().map { (ring, angle) -> ring to -angle }
+    }
+}
+
 data class GameState(
     val angles: FloatArray = FloatArray(9) { 0f }
 ) {
     var isShuffling = false
     var isWon = false
+    var selectedRing: Int = 0  // 0 = none, 1-8 = selected
+    var isButtonEnabled: Boolean = false
 
     fun normalizeAngle(angle: Float): Float {
         var normalized = angle % 360f
@@ -15,62 +37,23 @@ data class GameState(
         return normalized
     }
 
-    fun rotateCircle(circleIndex: Int, deltaAngle: Float) {
-        if (isShuffling || isWon || circleIndex < 1 || circleIndex > 8) return
+    fun applyMove(ring: Int, angle: Float) {
+        if (isWon || ring < 1 || ring > 8) return
 
-        // Rotate the touched circle
-        angles[circleIndex] = normalizeAngle(angles[circleIndex] + deltaAngle)
+        // Rotate the selected ring
+        angles[ring] = normalizeAngle(angles[ring] + angle)
 
-        // Propagate to inner circle (half rotation)
-        if (circleIndex > 1) {
-            angles[circleIndex - 1] = normalizeAngle(angles[circleIndex - 1] + deltaAngle * 0.5f)
+        // Propagate to inner ring (half rotation)
+        if (ring > 1) {
+            angles[ring - 1] = normalizeAngle(angles[ring - 1] + angle * 0.5f)
         }
 
-        // Propagate to outer circle (half rotation)
-        if (circleIndex < 8) {
-            angles[circleIndex + 1] = normalizeAngle(angles[circleIndex + 1] + deltaAngle * 0.5f)
+        // Propagate to outer ring (half rotation)
+        if (ring < 8) {
+            angles[ring + 1] = normalizeAngle(angles[ring + 1] + angle * 0.5f)
         }
 
         checkWinCondition()
-    }
-
-    fun shuffle(onStep: () -> Unit, onComplete: () -> Unit) {
-        isShuffling = true
-        isWon = false
-
-        val shuffleSteps = 20
-        var currentStep = 0
-
-        fun performStep() {
-            if (currentStep < shuffleSteps) {
-                val randomCircle = Random.nextInt(1, 9) // circles 1-8
-                val randomAngle = Random.nextInt(45, 316).toFloat() // 45° to 315°
-
-                // Directly rotate without propagation during shuffle
-                angles[randomCircle] = normalizeAngle(angles[randomCircle] + randomAngle)
-
-                // Apply propagation
-                if (randomCircle > 1) {
-                    angles[randomCircle - 1] = normalizeAngle(angles[randomCircle - 1] + randomAngle * 0.5f)
-                }
-                if (randomCircle < 8) {
-                    angles[randomCircle + 1] = normalizeAngle(angles[randomCircle + 1] + randomAngle * 0.5f)
-                }
-
-                currentStep++
-                onStep()
-
-                // Schedule next step
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    performStep()
-                }, 50)
-            } else {
-                isShuffling = false
-                onComplete()
-            }
-        }
-
-        performStep()
     }
 
     fun reset() {
@@ -78,14 +61,15 @@ data class GameState(
             angles[i] = 0f
         }
         isWon = false
+        selectedRing = 0
+        isButtonEnabled = false
     }
 
-    private fun checkWinCondition() {
+    fun checkWinCondition() {
         if (isShuffling) return
 
-        // Check if all circles 1-8 are within ±5° of any common angle
-        // We'll check if they're all aligned to the same angle (within tolerance)
-        val tolerance = 5f
+        // Check if all circles 1-8 are within ±3° of each other
+        val tolerance = 3f
         val referenceAngle = angles[1]
 
         var allAligned = true
@@ -116,6 +100,8 @@ data class GameState(
         if (!angles.contentEquals(other.angles)) return false
         if (isShuffling != other.isShuffling) return false
         if (isWon != other.isWon) return false
+        if (selectedRing != other.selectedRing) return false
+        if (isButtonEnabled != other.isButtonEnabled) return false
 
         return true
     }
@@ -124,6 +110,8 @@ data class GameState(
         var result = angles.contentHashCode()
         result = 31 * result + isShuffling.hashCode()
         result = 31 * result + isWon.hashCode()
+        result = 31 * result + selectedRing.hashCode()
+        result = 31 * result + isButtonEnabled.hashCode()
         return result
     }
 }
