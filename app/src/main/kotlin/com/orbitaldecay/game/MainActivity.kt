@@ -16,6 +16,10 @@ class MainActivity : AppCompatActivity() {
 
         // Set the game view as content
         val gameView = GameView(this)
+        gameView.layoutParams = android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
         setContentView(gameView)
     }
 
