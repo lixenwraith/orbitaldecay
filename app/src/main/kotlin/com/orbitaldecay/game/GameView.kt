@@ -105,6 +105,21 @@ class GameView @JvmOverloads constructor(
     private var lastTrackpadDragY = 0f
     private var ringSelectionAccumulator = 0f  // For smooth ring switching
 
+    // New state variables for buttons and animations
+    private var isSolving = false
+    private var showMenu = false
+    private var isWinAnimating = false
+    private var winAnimationPhase = 0  // 0-3 for wave phases
+    private var winWaveProgress = 0f
+
+    // Button dimensions
+    private var resetButtonX = 0f
+    private var resetButtonY = 0f
+    private var resetButtonRadius = 0f
+    private var menuButtonX = 0f
+    private var menuButtonY = 0f
+    private var menuButtonRadius = 0f
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
 
@@ -129,6 +144,16 @@ class GameView @JvmOverloads constructor(
         buttonRadius = radii[0] * BUTTON_RADIUS_RATIO
         ringPaint.strokeWidth = ringWidth
 
+        // Button dimensions
+        val buttonSize = 24f * resources.displayMetrics.density
+        val buttonMargin = 20f * resources.displayMetrics.density
+        resetButtonRadius = buttonSize
+        resetButtonX = buttonMargin + buttonSize
+        resetButtonY = buttonMargin + buttonSize
+        menuButtonX = w - buttonMargin - buttonSize
+        menuButtonY = buttonMargin + buttonSize
+        menuButtonRadius = buttonSize
+
         // Start game after geometry is ready (first layout only)
         if (oldw == 0 && oldh == 0) {
             startGame()
@@ -144,38 +169,31 @@ class GameView @JvmOverloads constructor(
         // Draw background
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
 
-        // Draw rings in correct z-order (lowest elevation first, selected ring last)
-        // 1. First pass: draw all non-elevated rings (elevation 0)
-        // 2. Second pass: draw neighbor rings (elevation 1)
-        // 3. Third pass: draw selected ring (elevation 2)
-
-        // Collect rings by elevation level
-        val elevation0 = mutableListOf<Int>()
-        val elevation1 = mutableListOf<Int>()
-        var elevation2: Int? = null
-
-        for (i in 1..8) {
-            val elevationLevel = when {
-                gameState.selectedRing == i -> 2
-                gameState.selectedRing > 0 && (i == gameState.selectedRing - 1 || i == gameState.selectedRing + 1) -> 1
-                else -> 0
+        // Draw rings in correct z-order with cascading elevation
+        // Group rings by elevation and draw lowest first
+        val ringsByElevation = (1..8).groupBy { ringIndex ->
+            if (isWinAnimating) {
+                getWinAnimationElevation(ringIndex)
+            } else if (gameState.selectedRing == 0) {
+                0
+            } else {
+                val distance = kotlin.math.abs(ringIndex - gameState.selectedRing)
+                when (distance) {
+                    0 -> 8  // Selected ring - highest
+                    1 -> 6
+                    2 -> 4
+                    3 -> 3
+                    4 -> 2
+                    5 -> 1
+                    else -> 0
+                }
             }
-            when (elevationLevel) {
-                0 -> elevation0.add(i)
-                1 -> elevation1.add(i)
-                2 -> elevation2 = i
-            }
-        }
+        }.toSortedMap()  // Sort by elevation (lowest first)
 
-        // Draw in z-order: flat rings first, then neighbors, then selected
-        for (i in elevation0) {
-            drawRingWithElevation(canvas, i, 0)
-        }
-        for (i in elevation1) {
-            drawRingWithElevation(canvas, i, 1)
-        }
-        elevation2?.let {
-            drawRingWithElevation(canvas, it, 2)
+        for ((elevation, rings) in ringsByElevation) {
+            for (ringIndex in rings) {
+                drawRingWithElevation(canvas, ringIndex, elevation)
+            }
         }
 
         // Draw center circle (ring 0) - solid fill, no notch
@@ -186,33 +204,47 @@ class GameView @JvmOverloads constructor(
             drawRingIndicator(canvas)
         }
 
-        // Draw WIN text if game is won
-        if (gameState.isWon) {
-            winTextPaint.textSize = 60f * resources.displayMetrics.density
-            canvas.drawText("SOLVED", centerX, centerY - radii[0] - 20f * resources.displayMetrics.density, winTextPaint)
-            winTextPaint.textSize = 24f * resources.displayMetrics.density
-            canvas.drawText("Tap to restart", centerX, centerY + radii[0] + 40f * resources.displayMetrics.density, winTextPaint)
+        // Check for win and trigger animation
+        if (gameState.isWon && !isWinAnimating && gameState.isButtonEnabled) {
+            startWinAnimation()
+        }
+
+        // Draw UI buttons (always visible unless menu is open)
+        if (!showMenu) {
+            drawResetButton(canvas)
+            drawMenuButton(canvas)
+        }
+
+        // Draw WIN text only after win animation completes
+        if (gameState.isWon && !isWinAnimating) {
+            winTextPaint.textSize = 48f * resources.displayMetrics.density
+            winTextPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+            canvas.drawText("SOLVED!", centerX, centerY, winTextPaint)
+            winTextPaint.textSize = 20f * resources.displayMetrics.density
+            winTextPaint.typeface = Typeface.DEFAULT
+            canvas.drawText("Press ↻ to play again", centerX, centerY + 40f * resources.displayMetrics.density, winTextPaint)
+        }
+
+        // Draw menu overlay last (on top of everything)
+        if (showMenu) {
+            drawMenuOverlay(canvas)
         }
     }
 
     private fun drawRingWithElevation(canvas: Canvas, index: Int, elevationLevel: Int) {
         val radius = radii[index]
 
-        // Calculate stroke width with elevation
-        val extraStroke = when (elevationLevel) {
-            2 -> 4f * resources.displayMetrics.density // Selected
-            1 -> 2f * resources.displayMetrics.density // Neighbor
-            else -> 0f
-        }
-
+        // Graduated stroke width based on elevation (0-8 scale)
+        val extraStroke = elevationLevel * 0.5f * resources.displayMetrics.density
         val strokeWidth = ringWidth + extraStroke
         ringPaint.strokeWidth = strokeWidth
 
-        // Set shadow based on elevation
+        // Graduated shadow based on elevation
         if (elevationLevel > 0) {
-            val shadowRadius = if (elevationLevel == 2) 8f else 4f
-            val shadowOffset = if (elevationLevel == 2) 4f else 2f
-            val shadowColor = if (elevationLevel == 2) 0x80000000.toInt() else 0x40000000.toInt()
+            val shadowRadius = elevationLevel * 1.2f
+            val shadowOffset = elevationLevel * 0.6f
+            val shadowAlpha = (0x20 + elevationLevel * 0x10).coerceAtMost(0xA0)
+            val shadowColor = (shadowAlpha shl 24) or 0x000000
             ringPaint.setShadowLayer(
                 shadowRadius * resources.displayMetrics.density,
                 shadowOffset * resources.displayMetrics.density,
@@ -266,8 +298,8 @@ class GameView @JvmOverloads constructor(
         val indicatorPaint = Paint().apply {
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
-            textSize = radii[0] * 1.8f  // 1.5x larger than before (was 1.2f)
-            typeface = Typeface.create("cursive", Typeface.NORMAL)  // Slightly cursive
+            textSize = radii[0] * 1.6f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)  // Bold serif
             color = if (gameState.selectedRing in 1..7) {
                 rainbowColors[gameState.selectedRing - 1]
             } else {
@@ -279,13 +311,294 @@ class GameView @JvmOverloads constructor(
         canvas.drawText(gameState.selectedRing.toString(), centerX, textY, indicatorPaint)
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!gameState.isButtonEnabled || gameState.isShuffling) {
-            return super.onTouchEvent(event)
+    private fun drawResetButton(canvas: Canvas) {
+        val paint = Paint().apply {
+            color = 0x80FFFFFF.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 3f * resources.displayMetrics.density
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
         }
 
+        // Draw circular arrow (refresh icon)
+        val rect = RectF(
+            resetButtonX - resetButtonRadius * 0.6f,
+            resetButtonY - resetButtonRadius * 0.6f,
+            resetButtonX + resetButtonRadius * 0.6f,
+            resetButtonY + resetButtonRadius * 0.6f
+        )
+        canvas.drawArc(rect, -60f, 300f, false, paint)
+
+        // Arrow head
+        val arrowSize = resetButtonRadius * 0.3f
+        val arrowX = resetButtonX + resetButtonRadius * 0.5f
+        val arrowY = resetButtonY - resetButtonRadius * 0.35f
+        val path = android.graphics.Path().apply {
+            moveTo(arrowX, arrowY - arrowSize)
+            lineTo(arrowX + arrowSize * 0.7f, arrowY + arrowSize * 0.5f)
+            lineTo(arrowX - arrowSize * 0.3f, arrowY + arrowSize * 0.3f)
+            close()
+        }
+        paint.style = Paint.Style.FILL
+        canvas.drawPath(path, paint)
+    }
+
+    private fun drawMenuButton(canvas: Canvas) {
+        val paint = Paint().apply {
+            color = 0x80FFFFFF.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 3f * resources.displayMetrics.density
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        val lineLength = menuButtonRadius * 0.8f
+        val lineSpacing = menuButtonRadius * 0.35f
+
+        // Three horizontal lines
+        for (i in -1..1) {
+            val y = menuButtonY + i * lineSpacing
+            canvas.drawLine(
+                menuButtonX - lineLength / 2f, y,
+                menuButtonX + lineLength / 2f, y,
+                paint
+            )
+        }
+    }
+
+    private fun drawMenuOverlay(canvas: Canvas) {
+        // Semi-transparent background
+        val overlayPaint = Paint().apply {
+            color = 0xE0202020.toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), overlayPaint)
+
+        val textPaint = Paint().apply {
+            color = 0xFFFFFFFF.toInt()
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+        }
+
+        val titleSize = 28f * resources.displayMetrics.density
+        val textSize = 18f * resources.displayMetrics.density
+        val lineHeight = textSize * 1.8f
+        var y = height * 0.2f
+
+        // Title
+        textPaint.textSize = titleSize
+        textPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+        canvas.drawText("ORBITAL DECAY", centerX, y, textPaint)
+        y += lineHeight * 2
+
+        // Rules
+        textPaint.textSize = textSize
+        textPaint.typeface = Typeface.DEFAULT
+        val rules = listOf(
+            "GOAL",
+            "Align all notches in a straight line",
+            "",
+            "CONTROLS",
+            "Tap: Select next ring",
+            "Drag left/right: Rotate selected ring",
+            "Drag up/down: Change ring selection",
+            "",
+            "MECHANICS",
+            "Rotating a ring also rotates",
+            "its neighbors at half speed",
+            "",
+            "Tap anywhere to close"
+        )
+
+        for (line in rules) {
+            if (line == "GOAL" || line == "CONTROLS" || line == "MECHANICS") {
+                textPaint.color = 0xFFFFFF00.toInt()  // Yellow for headers
+                textPaint.typeface = Typeface.DEFAULT_BOLD
+            } else {
+                textPaint.color = 0xFFFFFFFF.toInt()
+                textPaint.typeface = Typeface.DEFAULT
+            }
+            canvas.drawText(line, centerX, y, textPaint)
+            y += if (line.isEmpty()) lineHeight * 0.5f else lineHeight
+        }
+    }
+
+    private fun isTouchingButton(x: Float, y: Float, bx: Float, by: Float, radius: Float): Boolean {
+        val dx = x - bx
+        val dy = y - by
+        return sqrt(dx.pow(2) + dy.pow(2)) <= radius * 1.5f  // 1.5x for easier tap
+    }
+
+    private fun solveAndReshuffle() {
+        if (isSolving || gameState.isShuffling) return
+        isSolving = true
+        gameState.isButtonEnabled = false
+        gameState.selectedRing = 0
+        invalidate()
+
+        // Calculate target: align to top (12 o'clock)
+        val targetAngle = 0f
+
+        // Calculate shortest rotation for each ring to reach target
+        val moves = mutableListOf<Pair<Int, Float>>()
+        for (i in 1..8) {
+            var diff = targetAngle - gameState.angles[i]
+            // Normalize to -180..180 (shortest path)
+            while (diff > 180f) diff -= 360f
+            while (diff < -180f) diff += 360f
+            if (kotlin.math.abs(diff) > 0.5f) {
+                moves.add(i to diff)
+            }
+        }
+
+        // Animate solve (each ring independently, simultaneously)
+        animateSolve(moves) {
+            // After solve complete, start shuffle
+            postDelayed({
+                startGame()
+                isSolving = false
+            }, 500)
+        }
+    }
+
+    private fun animateSolve(moves: List<Pair<Int, Float>>, onComplete: () -> Unit) {
+        if (moves.isEmpty()) {
+            onComplete()
+            return
+        }
+
+        val duration = 800L
+        val animators = mutableListOf<ValueAnimator>()
+
+        for ((ring, targetDelta) in moves) {
+            val startAngle = gameState.angles[ring]
+            val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+                this.duration = duration
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener {
+                    val progress = it.animatedValue as Float
+                    gameState.angles[ring] = gameState.normalizeAngle(startAngle + targetDelta * progress)
+                    invalidate()
+                }
+            }
+            animators.add(animator)
+        }
+
+        // Start all animators, call onComplete when last one finishes
+        animators.forEachIndexed { index, animator ->
+            if (index == animators.lastIndex) {
+                animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        onComplete()
+                    }
+                })
+            }
+            animator.start()
+        }
+    }
+
+    private fun startWinAnimation() {
+        isWinAnimating = true
+        gameState.isButtonEnabled = false
+        gameState.selectedRing = 0
+        invalidate()
+
+        // Step 1: Align notches to their center (shortest path)
+        val avgAngle = gameState.angles.slice(1..8).average().toFloat()
+        val alignMoves = mutableListOf<Pair<Int, Float>>()
+        for (i in 1..8) {
+            var diff = avgAngle - gameState.angles[i]
+            while (diff > 180f) diff -= 360f
+            while (diff < -180f) diff += 360f
+            alignMoves.add(i to diff)
+        }
+
+        animateSolve(alignMoves) {
+            // Step 2: Start wave animation
+            startWaveAnimation()
+        }
+    }
+
+    private fun startWaveAnimation() {
+        val waveDuration = 500L  // Each wave takes 500ms
+        val totalWaves = 3
+        var currentWave = 0
+
+        fun animateWave() {
+            if (currentWave >= totalWaves) {
+                // Animation complete - flatten and lock
+                isWinAnimating = false
+                winAnimationPhase = 0
+                invalidate()
+                return
+            }
+
+            val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = waveDuration
+                interpolator = LinearInterpolator()
+                addUpdateListener {
+                    winWaveProgress = it.animatedValue as Float
+                    winAnimationPhase = currentWave + 1
+                    invalidate()
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        currentWave++
+                        animateWave()
+                    }
+                })
+            }
+            animator.start()
+        }
+
+        animateWave()
+    }
+
+    private fun getWinAnimationElevation(ringIndex: Int): Int {
+        if (!isWinAnimating || winAnimationPhase == 0) return 0
+
+        // Wave travels from center (ring 1) outward
+        // Progress 0-1 maps to wave position 0-9
+        val waveCenter = winWaveProgress * 10f
+        val distance = kotlin.math.abs(ringIndex - waveCenter)
+
+        // Bell curve elevation based on distance from wave center
+        val elevation = if (distance < 3f) {
+            ((3f - distance) / 3f * 8f).toInt()
+        } else {
+            0
+        }
+        return elevation
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // Check menu overlay tap (close it)
+                if (showMenu) {
+                    showMenu = false
+                    invalidate()
+                    return true
+                }
+
+                // Check reset button
+                if (isTouchingButton(event.x, event.y, resetButtonX, resetButtonY, resetButtonRadius)) {
+                    solveAndReshuffle()
+                    return true
+                }
+
+                // Check menu button
+                if (isTouchingButton(event.x, event.y, menuButtonX, menuButtonY, menuButtonRadius)) {
+                    showMenu = true
+                    invalidate()
+                    return true
+                }
+
+                // Block input during animations
+                if (!gameState.isButtonEnabled || gameState.isShuffling || isSolving || isWinAnimating) {
+                    return super.onTouchEvent(event)
+                }
+
                 // Entire screen is touch area (when game is active)
                 isButtonPressed = true
                 trackpadTouchStartX = event.x
