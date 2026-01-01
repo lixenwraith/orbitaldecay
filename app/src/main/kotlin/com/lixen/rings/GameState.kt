@@ -1,4 +1,4 @@
-package com.orbitaldecay.game
+package com.lixen.rings
 
 import kotlin.math.abs
 import kotlin.random.Random

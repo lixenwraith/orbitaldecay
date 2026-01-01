@@ -1,4 +1,4 @@
-package com.orbitaldecay.game
+package com.lixen.rings
 
 import android.animation.ValueAnimator
 import android.content.Context
@@ -410,7 +410,7 @@ class GameView @JvmOverloads constructor(
         textPaint.textSize = titleSize
         textPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         textPaint.color = 0xFFFFFFFF.toInt()
-        canvas.drawText("LIXEN PUZZLE", centerX, y, textPaint)
+        canvas.drawText("LIXEN RINGS", centerX, y, textPaint)
         y += lineHeight * 1.3f
 
         // Goal header
@@ -488,7 +488,7 @@ class GameView @JvmOverloads constructor(
         textPaint.color = 0xFFFFFFFF.toInt()
         canvas.drawText("LIXEN", leftCenterX, y, textPaint)
         y += titleSize * 0.9f
-        canvas.drawText("PUZZLE", leftCenterX, y, textPaint)
+        canvas.drawText("RINGS", leftCenterX, y, textPaint)
         y += lineHeight * 1.3f
 
         // Goal header

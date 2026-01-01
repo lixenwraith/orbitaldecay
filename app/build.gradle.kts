@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.orbitaldecay.game"
+    namespace = "com.lixen.rings"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.orbitaldecay.game"
+        applicationId = "com.lixen.rings"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

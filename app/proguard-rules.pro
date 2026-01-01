@@ -6,4 +6,4 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Keep all classes in the game package
--keep class com.orbitaldecay.game.** { *; }
+-keep class com.lixen.rings.** { *; }

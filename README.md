@@ -1,4 +1,4 @@
-# Lixen Puzzle
+# Lixen Rings
 
 A concentric ring alignment puzzle for Android.
 

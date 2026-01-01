@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OrbitalDecay"
+rootProject.name = "LixenRings"
 include(":app")

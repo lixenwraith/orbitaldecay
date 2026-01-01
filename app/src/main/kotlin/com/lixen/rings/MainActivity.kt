@@ -1,4 +1,4 @@
-package com.orbitaldecay.game
+package com.lixen.rings
 
 import android.os.Bundle
 import android.view.View
