@@ -216,16 +216,11 @@ class GameView @JvmOverloads constructor(
             startWinAnimation()
         }
 
-        // Draw ring indicator OR smiley on win
-        if (gameState.isWon && !isWinAnimating) {
+        // Draw content in center: ring indicator OR smiley
+        if (gameState.isWon) {
             drawWinSmiley(canvas)
         } else if (gameState.isButtonEnabled && !gameState.isWon) {
             drawRingIndicator(canvas)
-        }
-
-        // Check for win and trigger animation (backup check)
-        if (gameState.isWon && !isWinAnimating && gameState.isButtonEnabled) {
-            startWinAnimation()
         }
 
         // Draw UI buttons (always visible unless menu is open)
@@ -238,16 +233,19 @@ class GameView @JvmOverloads constructor(
             }
         }
 
-        // Draw WIN text only after win animation completes
-        if (gameState.isWon && !isWinAnimating) {
-            winTextPaint.textSize = 36f * resources.displayMetrics.density
-            winTextPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
-            winTextPaint.color = 0xFFFFFF00.toInt()
-            canvas.drawText("SOLVED!", centerX, centerY + radii[0] + 60f * resources.displayMetrics.density, winTextPaint)
+        // Draw win text (below rings, outside)
+        if (gameState.isWon) {
+            val textY = centerY + radii[8] + ringWidth + 50f * resources.displayMetrics.density
+
             winTextPaint.textSize = 18f * resources.displayMetrics.density
+            winTextPaint.typeface = Typeface.DEFAULT_BOLD
+            winTextPaint.color = 0xFFFFFF00.toInt()
+            canvas.drawText("SOLVED!", centerX, textY, winTextPaint)
+
+            winTextPaint.textSize = 16f * resources.displayMetrics.density
             winTextPaint.typeface = Typeface.DEFAULT
             winTextPaint.color = 0xFFFFFFFF.toInt()
-            canvas.drawText("Press ↻ to play again", centerX, centerY + radii[0] + 90f * resources.displayMetrics.density, winTextPaint)
+            canvas.drawText("Tap \u21bb to restart", centerX, textY + 30f * resources.displayMetrics.density, winTextPaint)
         }
 
         // Draw menu overlay last (on top of everything)
@@ -493,6 +491,11 @@ class GameView @JvmOverloads constructor(
 
     private fun solveAndReshuffle() {
         if (isSolving || gameState.isShuffling) return
+
+        // Stop any ongoing win animation
+        isWinAnimating = false
+        winAnimationPhase = 0
+
         isSolving = true
         gameState.isButtonEnabled = false
         gameState.selectedRing = 0
@@ -666,42 +669,55 @@ class GameView @JvmOverloads constructor(
     private fun checkWinConditionInternal(): Boolean {
         val notchSizes = floatArrayOf(0f, 75f, 60f, 50f, 42f, 35f, 30f, 26f, 22.5f)
 
-        // Find the smallest notch (ring 8) - this is our limiting factor
-        // All other notch centers must be within range that ring 8's notch can cover
+        // The smallest notch (ring 8 = 22.5) is the most restrictive.
+        // We sample points across ring 8's notch and check if any point
+        // falls within ALL other notches simultaneously.
 
-        // Use ring 8's position as reference
-        val refAngle = gameState.angles[8]
+        val center8 = gameState.angles[8]
+        val halfWidth8 = notchSizes[8] / 2f
 
-        for (ring in 1..7) {
-            var diff = gameState.angles[ring] - refAngle
-            while (diff > 180f) diff -= 360f
-            while (diff < -180f) diff += 360f
+        // Sample 21 points across ring 8's notch opening
+        for (i in 0..20) {
+            val offset = -halfWidth8 + (halfWidth8 * 2f * i / 20f)
+            val candidateAngle = center8 + offset
 
-            // The combined tolerance is half of ring's notch + half of ring 8's notch
-            val tolerance = (notchSizes[ring] + notchSizes[8]) / 2f
+            var isValidLine = true
+            for (ring in 1..7) {
+                // Check if candidateAngle falls within this ring's notch
+                var diff = candidateAngle - gameState.angles[ring]
+                // Normalize to [-180, 180]
+                while (diff > 180f) diff -= 360f
+                while (diff < -180f) diff += 360f
 
-            if (kotlin.math.abs(diff) > tolerance) {
-                return false
+                // Candidate must be within ring's notch half-width
+                if (kotlin.math.abs(diff) > notchSizes[ring] / 2f) {
+                    isValidLine = false
+                    break
+                }
             }
+
+            if (isValidLine) return true
         }
-        return true
+
+        return false
     }
 
     private fun drawWinSmiley(canvas: Canvas) {
         val paint = Paint().apply {
-            color = 0xFFFFFF00.toInt()  // Yellow
+            color = 0xFFB0B0B0.toInt()  // Same gray as outer ring
             style = Paint.Style.STROKE
-            strokeWidth = 4f * resources.displayMetrics.density
+            strokeWidth = 6f * resources.displayMetrics.density
             isAntiAlias = true
             strokeCap = Paint.Cap.ROUND
         }
 
-        val size = radii[0] * 0.7f  // Fit within center circle
+        // 3x bigger - use most of center circle
+        val size = radii[0] * 0.85f
 
         // Left eye
-        val eyeY = centerY - size * 0.15f
-        val eyeSpacing = size * 0.25f
-        val eyeRadius = size * 0.08f
+        val eyeY = centerY - size * 0.2f
+        val eyeSpacing = size * 0.3f
+        val eyeRadius = size * 0.12f
         paint.style = Paint.Style.FILL
         canvas.drawCircle(centerX - eyeSpacing, eyeY, eyeRadius, paint)
 
@@ -710,13 +726,14 @@ class GameView @JvmOverloads constructor(
 
         // Smile (arc)
         paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 8f * resources.displayMetrics.density
         val smileRect = RectF(
-            centerX - size * 0.35f,
-            centerY - size * 0.1f,
-            centerX + size * 0.35f,
-            centerY + size * 0.4f
+            centerX - size * 0.45f,
+            centerY - size * 0.15f,
+            centerX + size * 0.45f,
+            centerY + size * 0.5f
         )
-        canvas.drawArc(smileRect, 20f, 140f, false, paint)
+        canvas.drawArc(smileRect, 15f, 150f, false, paint)
     }
 
     private fun startWinAnimation() {
@@ -736,19 +753,17 @@ class GameView @JvmOverloads constructor(
         }
 
         animateSolve(alignMoves) {
-            // Step 2: Start wave animation
+            // Start continuous wave animation (keeps isWinAnimating = true)
             startWaveAnimation()
         }
     }
 
     private fun startWaveAnimation() {
-        val waveDuration = 500L  // Each wave takes 500ms
-        val totalWaves = 3
-        var currentWave = 0
+        val waveDuration = 600L  // Slightly slower for smoothness
 
         fun animateWave() {
-            if (currentWave >= totalWaves) {
-                // Animation complete - flatten and lock
+            // Check if still in win state (not reset)
+            if (!gameState.isWon) {
                 isWinAnimating = false
                 winAnimationPhase = 0
                 invalidate()
@@ -760,19 +775,22 @@ class GameView @JvmOverloads constructor(
                 interpolator = LinearInterpolator()
                 addUpdateListener {
                     winWaveProgress = it.animatedValue as Float
-                    winAnimationPhase = currentWave + 1
                     invalidate()
                 }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        currentWave++
-                        animateWave()
+                        if (isAttachedToWindow && gameState.isWon) {
+                            // Continue waving indefinitely
+                            winAnimationPhase = (winAnimationPhase % 3) + 1
+                            animateWave()
+                        }
                     }
                 })
             }
             animator.start()
         }
 
+        winAnimationPhase = 1
         animateWave()
     }
 
@@ -926,6 +944,11 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun startGame() {
+        // Clear win animation state
+        isWinAnimating = false
+        winAnimationPhase = 0
+        winWaveProgress = 0f
+
         gameState.reset()
         buttonAlpha = 0f
 
