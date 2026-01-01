@@ -14,10 +14,8 @@ import android.view.View
 import android.view.animation.LinearInterpolator
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 class GameView @JvmOverloads constructor(
@@ -867,14 +865,28 @@ class GameView @JvmOverloads constructor(
         val arrowSize = ringWidth * 1.5f
 
         when (feedbackMode) {
-            DragMode.SELECTING -> drawStraightArrow(canvas, cueX, cueY, arrowSize, feedbackDirection, paint)
-            DragMode.ROTATING -> drawCurvedArrow(canvas, cueX, cueY, arrowSize, feedbackDirection, paint)
+            DragMode.SELECTING -> drawVerticalArrow(canvas, cueX, cueY, arrowSize, feedbackDirection, paint)
+            DragMode.ROTATING -> {
+                // Arrow shows direction the nearest ring edge moves
+                // In landscape: left/right sides show vertical arrows
+                // In portrait: top/bottom show horizontal arrows
+                val effectiveDirection = if (showOnAlternateSide) {
+                    -feedbackDirection  // Opposite side = opposite visual direction
+                } else {
+                    feedbackDirection
+                }
+                if (isLandscape) {
+                    drawVerticalArrow(canvas, cueX, cueY, arrowSize, -effectiveDirection, paint)
+                } else {
+                    drawHorizontalArrow(canvas, cueX, cueY, arrowSize, effectiveDirection, paint)
+                }
+            }
             else -> {}
         }
     }
 
-    private fun drawStraightArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
-        // direction: 1 = up (outer), -1 = down (inner)
+    private fun drawVerticalArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
+        // direction: 1 = up, -1 = down
         val dy = size * direction
 
         // Shaft
@@ -887,33 +899,18 @@ class GameView @JvmOverloads constructor(
         canvas.drawLine(cx, tipY, cx + headSize, tipY + headSize * direction, paint)
     }
 
-    private fun drawCurvedArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
-        // direction: 1 = clockwise, -1 = counter-clockwise
-        val radius = size * 0.8f
-        val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+    private fun drawHorizontalArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
+        // direction: 1 = right, -1 = left
+        val dx = size * direction
 
-        // Arc: 270° sweep for visibility
-        val startAngle = if (direction > 0) -135f else -45f
-        canvas.drawArc(rect, startAngle, 270f * direction, false, paint)
+        // Shaft
+        canvas.drawLine(cx - dx * 0.5f, cy, cx + dx * 0.5f, cy, paint)
 
-        // Arrowhead at end of arc
-        val headAngle = Math.toRadians((startAngle + 270f * direction).toDouble())
-        val headX = cx + radius * cos(headAngle).toFloat()
-        val headY = cy + radius * sin(headAngle).toFloat()
-
-        val headSize = size * 0.3f
-        val perpAngle = headAngle + Math.PI / 2 * direction
-        val tangentX = cos(perpAngle).toFloat()
-        val tangentY = sin(perpAngle).toFloat()
-        val normalX = cos(headAngle).toFloat()
-        val normalY = sin(headAngle).toFloat()
-
-        canvas.drawLine(headX, headY,
-            headX - (tangentX + normalX * 0.5f) * headSize * direction,
-            headY - (tangentY + normalY * 0.5f) * headSize * direction, paint)
-        canvas.drawLine(headX, headY,
-            headX - (tangentX - normalX * 0.5f) * headSize * direction,
-            headY - (tangentY - normalY * 0.5f) * headSize * direction, paint)
+        // Arrowhead at tip
+        val headSize = size * 0.35f
+        val tipX = cx + dx * 0.5f
+        canvas.drawLine(tipX, cy, tipX - headSize * direction, cy - headSize, paint)
+        canvas.drawLine(tipX, cy, tipX - headSize * direction, cy + headSize, paint)
     }
 
     private fun startWinAnimation() {
