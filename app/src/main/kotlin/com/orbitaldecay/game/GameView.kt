@@ -209,8 +209,8 @@ class GameView @JvmOverloads constructor(
         // Draw center circle (ring 0) - solid fill, no notch
         canvas.drawCircle(centerX, centerY, radii[0], centerCirclePaint)
 
-        // Check win condition after solver or manual play
-        if (!gameState.isWon && !gameState.isShuffling && gameState.isButtonEnabled && checkWinConditionInternal()) {
+        // Check win condition during manual play
+        if (!gameState.isWon && !gameState.isShuffling && !isSolverRunning && gameState.isButtonEnabled && checkWinConditionInternal()) {
             gameState.isWon = true
             gameState.isButtonEnabled = false  // Lock interaction
             startWinAnimation()
@@ -231,21 +231,6 @@ class GameView @JvmOverloads constructor(
             if (!gameState.isWon && gameState.isButtonEnabled && !isSolving && !isSolverRunning) {
                 drawSolverButton(canvas)
             }
-        }
-
-        // Draw win text (below rings, outside)
-        if (gameState.isWon) {
-            val textY = centerY + radii[8] + ringWidth + 50f * resources.displayMetrics.density
-
-            winTextPaint.textSize = 18f * resources.displayMetrics.density
-            winTextPaint.typeface = Typeface.DEFAULT_BOLD
-            winTextPaint.color = 0xFFFFFF00.toInt()
-            canvas.drawText("SOLVED!", centerX, textY, winTextPaint)
-
-            winTextPaint.textSize = 16f * resources.displayMetrics.density
-            winTextPaint.typeface = Typeface.DEFAULT
-            winTextPaint.color = 0xFFFFFFFF.toInt()
-            canvas.drawText("Tap \u21bb to restart", centerX, textY + 30f * resources.displayMetrics.density, winTextPaint)
         }
 
         // Draw menu overlay last (on top of everything)
@@ -337,33 +322,15 @@ class GameView @JvmOverloads constructor(
     private fun drawResetButton(canvas: Canvas) {
         val paint = Paint().apply {
             color = 0x80FFFFFF.toInt()
-            style = Paint.Style.STROKE
-            strokeWidth = 3f * resources.displayMetrics.density
+            style = Paint.Style.FILL
             isAntiAlias = true
-            strokeCap = Paint.Cap.ROUND
+            textAlign = Paint.Align.CENTER
+            textSize = resetButtonRadius * 1.4f
+            typeface = Typeface.DEFAULT_BOLD
         }
 
-        // Draw circular arrow (refresh icon)
-        val rect = RectF(
-            resetButtonX - resetButtonRadius * 0.6f,
-            resetButtonY - resetButtonRadius * 0.6f,
-            resetButtonX + resetButtonRadius * 0.6f,
-            resetButtonY + resetButtonRadius * 0.6f
-        )
-        canvas.drawArc(rect, -60f, 300f, false, paint)
-
-        // Arrow head
-        val arrowSize = resetButtonRadius * 0.3f
-        val arrowX = resetButtonX + resetButtonRadius * 0.5f
-        val arrowY = resetButtonY - resetButtonRadius * 0.35f
-        val path = android.graphics.Path().apply {
-            moveTo(arrowX, arrowY - arrowSize)
-            lineTo(arrowX + arrowSize * 0.7f, arrowY + arrowSize * 0.5f)
-            lineTo(arrowX - arrowSize * 0.3f, arrowY + arrowSize * 0.3f)
-            close()
-        }
-        paint.style = Paint.Style.FILL
-        canvas.drawPath(path, paint)
+        val textY = resetButtonY - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText("↻", resetButtonX, textY, paint)
     }
 
     private fun drawMenuButton(canvas: Canvas) {
@@ -493,6 +460,8 @@ class GameView @JvmOverloads constructor(
         if (isSolving || gameState.isShuffling) return
 
         // Stop any ongoing win animation
+        waveAnimator?.cancel()
+        waveAnimator = null
         isWinAnimating = false
         winAnimationPhase = 0
 
@@ -586,7 +555,9 @@ class GameView @JvmOverloads constructor(
         // Check if already solved
         if (checkWinConditionInternal()) {
             gameState.isWon = true
-            finishSolver()
+            isSolverRunning = false
+            gameState.selectedRing = 0
+            startWinAnimation()
             return
         }
 
@@ -667,39 +638,33 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun checkWinConditionInternal(): Boolean {
-        val notchSizes = floatArrayOf(0f, 75f, 60f, 50f, 42f, 35f, 30f, 26f, 22.5f)
+        // Win condition: all notch centers are within half of smallest notch opening (11.25°)
+        // Use proper angular math with radians, handling wrap-around at 0/360
 
-        // The smallest notch (ring 8 = 22.5) is the most restrictive.
-        // We sample points across ring 8's notch and check if any point
-        // falls within ALL other notches simultaneously.
+        val smallestNotchHalf = 22.5f / 2f  // 11.25 degrees tolerance
 
-        val center8 = gameState.angles[8]
-        val halfWidth8 = notchSizes[8] / 2f
+        // Convert all angles to radians for proper math
+        val angles = (1..8).map {
+            var a = gameState.angles[it] % 360f
+            if (a < 0) a += 360f
+            Math.toRadians(a.toDouble())
+        }.sorted()
 
-        // Sample 21 points across ring 8's notch opening
-        for (i in 0..20) {
-            val offset = -halfWidth8 + (halfWidth8 * 2f * i / 20f)
-            val candidateAngle = center8 + offset
-
-            var isValidLine = true
-            for (ring in 1..7) {
-                // Check if candidateAngle falls within this ring's notch
-                var diff = candidateAngle - gameState.angles[ring]
-                // Normalize to [-180, 180]
-                while (diff > 180f) diff -= 360f
-                while (diff < -180f) diff += 360f
-
-                // Candidate must be within ring's notch half-width
-                if (kotlin.math.abs(diff) > notchSizes[ring] / 2f) {
-                    isValidLine = false
-                    break
-                }
-            }
-
-            if (isValidLine) return true
+        // Find the smallest angular span that contains all points
+        // This is 2π minus the largest gap between consecutive angles
+        var maxGap = 0.0
+        for (i in angles.indices) {
+            val next = if (i == angles.lastIndex) angles[0] + 2 * Math.PI else angles[i + 1]
+            val gap = next - angles[i]
+            if (gap > maxGap) maxGap = gap
         }
 
-        return false
+        // The span is the complement of the largest gap
+        val spanRadians = 2 * Math.PI - maxGap
+        val spanDegrees = Math.toDegrees(spanRadians).toFloat()
+
+        // Win if all notches fit within the tolerance
+        return spanDegrees <= smallestNotchHalf
     }
 
     private fun drawWinSmiley(canvas: Canvas) {
@@ -758,19 +723,28 @@ class GameView @JvmOverloads constructor(
         }
     }
 
+    private var waveAnimator: ValueAnimator? = null
+
     private fun startWaveAnimation() {
-        val waveDuration = 600L  // Slightly slower for smoothness
+        val waveDuration = 500L
 
         fun animateWave() {
             // Check if still in win state (not reset)
             if (!gameState.isWon) {
                 isWinAnimating = false
                 winAnimationPhase = 0
+                waveAnimator = null
                 invalidate()
                 return
             }
 
-            val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            // Pause animation while menu is open
+            if (showMenu) {
+                postDelayed({ animateWave() }, 100)
+                return
+            }
+
+            waveAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = waveDuration
                 interpolator = LinearInterpolator()
                 addUpdateListener {
@@ -787,7 +761,7 @@ class GameView @JvmOverloads constructor(
                     }
                 })
             }
-            animator.start()
+            waveAnimator?.start()
         }
 
         winAnimationPhase = 1
@@ -798,13 +772,13 @@ class GameView @JvmOverloads constructor(
         if (!isWinAnimating || winAnimationPhase == 0) return 0
 
         // Wave travels from center (ring 1) outward
-        // Progress 0-1 maps to wave position 0-9
-        val waveCenter = winWaveProgress * 10f
+        // Progress 0-1 maps to wave position across rings
+        val waveCenter = 1f + winWaveProgress * 9f  // 1 to 10
         val distance = kotlin.math.abs(ringIndex - waveCenter)
 
-        // Bell curve elevation based on distance from wave center
-        val elevation = if (distance < 3f) {
-            ((3f - distance) / 3f * 8f).toInt()
+        // Stronger bell curve elevation for more visible effect
+        val elevation = if (distance < 2.5f) {
+            ((2.5f - distance) / 2.5f * 10f).toInt()
         } else {
             0
         }
@@ -945,6 +919,8 @@ class GameView @JvmOverloads constructor(
 
     private fun startGame() {
         // Clear win animation state
+        waveAnimator?.cancel()
+        waveAnimator = null
         isWinAnimating = false
         winAnimationPhase = 0
         winWaveProgress = 0f
