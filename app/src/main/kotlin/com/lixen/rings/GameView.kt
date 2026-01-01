@@ -12,8 +12,12 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.LinearInterpolator
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 class GameView @JvmOverloads constructor(
@@ -21,6 +25,8 @@ class GameView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+
+    private enum class DragMode { NONE, ROTATING, SELECTING }
 
     init {
         // Required for setShadowLayer to work
@@ -100,10 +106,22 @@ class GameView @JvmOverloads constructor(
     // Touch handling for full-screen control
     private var trackpadTouchStartX = 0f
     private var trackpadTouchStartY = 0f
-    private var trackpadIsDragging = false
     private var lastTrackpadDragX = 0f
     private var lastTrackpadDragY = 0f
     private var ringSelectionAccumulator = 0f  // For smooth ring switching
+
+    // Drag mode lock
+    private var dragMode = DragMode.NONE
+    private var dragLockThreshold = 15f  // Will be set in onSizeChanged
+
+    // Visual feedback cues
+    private var feedbackMode: DragMode = DragMode.NONE
+    private var feedbackDirection: Int = 0  // -1 = left/down, 1 = right/up
+    private var feedbackAlpha: Float = 0f
+    private var feedbackLastUpdate: Long = 0L
+    private var feedbackTouchX: Float = 0f  // Track touch position for adaptive placement
+    private var feedbackTouchY: Float = 0f
+    private val feedbackFadeDuration = 500L
 
     // New state variables for buttons and animations
     private var isSolving = false
@@ -164,6 +182,9 @@ class GameView @JvmOverloads constructor(
         solverButtonX = w - buttonMargin - buttonSize
         solverButtonY = h - buttonMargin - buttonSize
         solverButtonRadius = buttonSize
+
+        // Set drag lock threshold based on display density
+        dragLockThreshold = 15f * resources.displayMetrics.density
 
         // Start game after geometry is ready (first layout only)
         if (oldw == 0 && oldh == 0) {
@@ -233,6 +254,9 @@ class GameView @JvmOverloads constructor(
                 drawSolverButton(canvas)
             }
         }
+
+        // Draw feedback cue for drag gestures
+        drawFeedbackCue(canvas)
 
         // Draw menu overlay last (on top of everything)
         if (showMenu) {
@@ -797,6 +821,101 @@ class GameView @JvmOverloads constructor(
         canvas.drawArc(smileRect, 15f, 150f, false, paint)
     }
 
+    private fun drawFeedbackCue(canvas: Canvas) {
+        if (feedbackMode == DragMode.NONE) return
+
+        // Calculate fade
+        val elapsed = System.currentTimeMillis() - feedbackLastUpdate
+        if (elapsed > feedbackFadeDuration) {
+            feedbackMode = DragMode.NONE
+            feedbackAlpha = 0f
+            return
+        }
+        feedbackAlpha = 1f - (elapsed.toFloat() / feedbackFadeDuration)
+        postInvalidateDelayed(16)  // Continue animation
+
+        val isLandscape = width > height
+        val offset = ringWidth * 3 + radii[8]
+
+        // Adaptive position: opposite side of touch
+        val showOnAlternateSide = if (isLandscape) {
+            feedbackTouchX > centerX  // Touch on right → show on left
+        } else {
+            feedbackTouchY < centerY  // Touch on top → show on bottom
+        }
+
+        val cueX: Float
+        val cueY: Float
+        if (isLandscape) {
+            cueX = if (showOnAlternateSide) centerX - offset else centerX + offset
+            cueY = centerY
+        } else {
+            cueX = centerX
+            cueY = if (showOnAlternateSide) centerY + offset else centerY - offset
+        }
+
+        val paint = Paint().apply {
+            color = 0xFFFFFFFF.toInt()
+            alpha = (feedbackAlpha * 180).toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 4f * resources.displayMetrics.density
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            isAntiAlias = true
+        }
+
+        val arrowSize = ringWidth * 1.5f
+
+        when (feedbackMode) {
+            DragMode.SELECTING -> drawStraightArrow(canvas, cueX, cueY, arrowSize, feedbackDirection, paint)
+            DragMode.ROTATING -> drawCurvedArrow(canvas, cueX, cueY, arrowSize, feedbackDirection, paint)
+            else -> {}
+        }
+    }
+
+    private fun drawStraightArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
+        // direction: 1 = up (outer), -1 = down (inner)
+        val dy = size * direction
+
+        // Shaft
+        canvas.drawLine(cx, cy + dy * 0.5f, cx, cy - dy * 0.5f, paint)
+
+        // Arrowhead at tip
+        val headSize = size * 0.35f
+        val tipY = cy - dy * 0.5f
+        canvas.drawLine(cx, tipY, cx - headSize, tipY + headSize * direction, paint)
+        canvas.drawLine(cx, tipY, cx + headSize, tipY + headSize * direction, paint)
+    }
+
+    private fun drawCurvedArrow(canvas: Canvas, cx: Float, cy: Float, size: Float, direction: Int, paint: Paint) {
+        // direction: 1 = clockwise, -1 = counter-clockwise
+        val radius = size * 0.8f
+        val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+
+        // Arc: 270° sweep for visibility
+        val startAngle = if (direction > 0) -135f else -45f
+        canvas.drawArc(rect, startAngle, 270f * direction, false, paint)
+
+        // Arrowhead at end of arc
+        val headAngle = Math.toRadians((startAngle + 270f * direction).toDouble())
+        val headX = cx + radius * cos(headAngle).toFloat()
+        val headY = cy + radius * sin(headAngle).toFloat()
+
+        val headSize = size * 0.3f
+        val perpAngle = headAngle + Math.PI / 2 * direction
+        val tangentX = cos(perpAngle).toFloat()
+        val tangentY = sin(perpAngle).toFloat()
+        val normalX = cos(headAngle).toFloat()
+        val normalY = sin(headAngle).toFloat()
+
+        canvas.drawLine(headX, headY,
+            headX - (tangentX + normalX * 0.5f) * headSize * direction,
+            headY - (tangentY + normalY * 0.5f) * headSize * direction, paint)
+        canvas.drawLine(headX, headY,
+            headX - (tangentX - normalX * 0.5f) * headSize * direction,
+            headY - (tangentY - normalY * 0.5f) * headSize * direction, paint)
+    }
+
     private fun startWinAnimation() {
         isWinAnimating = true
         gameState.isButtonEnabled = false
@@ -934,50 +1053,71 @@ class GameView @JvmOverloads constructor(
                 trackpadTouchStartY = event.y
                 lastTrackpadDragX = event.x
                 lastTrackpadDragY = event.y
-                trackpadIsDragging = false
+                dragMode = DragMode.NONE
                 ringSelectionAccumulator = 0f
                 invalidate()
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (isButtonPressed) {
-                    val dx = event.x - trackpadTouchStartX
-                    val dy = event.y - trackpadTouchStartY
-                    val distance = sqrt(dx.pow(2) + dy.pow(2))
+                if (isButtonPressed && gameState.selectedRing > 0) {
+                    // Determine drag mode if not yet locked
+                    if (dragMode == DragMode.NONE) {
+                        val dx = event.x - trackpadTouchStartX
+                        val dy = event.y - trackpadTouchStartY
+                        val distance = sqrt(dx.pow(2) + dy.pow(2))
 
-                    if (distance > 10f * resources.displayMetrics.density) {
-                        trackpadIsDragging = true
+                        if (distance > dragLockThreshold) {
+                            // Angle from horizontal: 0° = right, 90° = down, -90° = up
+                            val angle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                            // Horizontal priority: ±60° from horizontal axis = ROTATING
+                            dragMode = if (abs(angle) <= 60f || abs(angle) >= 120f) {
+                                DragMode.ROTATING
+                            } else {
+                                DragMode.SELECTING
+                            }
+                            lastTrackpadDragX = event.x
+                            lastTrackpadDragY = event.y
+                        }
                     }
 
-                    if (trackpadIsDragging && gameState.selectedRing > 0) {
-                        // Horizontal drag = rotation
-                        val deltaX = event.x - lastTrackpadDragX
-                        val rotationAngle = deltaX * DRAG_SENSITIVITY
-                        gameState.applyMove(gameState.selectedRing, rotationAngle)
-
-                        // Vertical drag = ring selection (with threshold)
-                        val deltaY = event.y - lastTrackpadDragY
-                        ringSelectionAccumulator += deltaY
-
-                        val threshold = 30f * resources.displayMetrics.density
-                        if (ringSelectionAccumulator > threshold) {
-                            // Drag down = select lower ring number (toward center)
-                            if (gameState.selectedRing > 1) {
-                                gameState.selectedRing--
-                            }
-                            ringSelectionAccumulator = 0f
-                        } else if (ringSelectionAccumulator < -threshold) {
-                            // Drag up = select higher ring number (toward outside)
-                            if (gameState.selectedRing < 8) {
-                                gameState.selectedRing++
-                            }
-                            ringSelectionAccumulator = 0f
+                    when (dragMode) {
+                        DragMode.ROTATING -> {
+                            val deltaX = event.x - lastTrackpadDragX
+                            gameState.applyMove(gameState.selectedRing, deltaX * DRAG_SENSITIVITY)
+                            lastTrackpadDragX = event.x
+                            // Update feedback cue state
+                            feedbackMode = dragMode
+                            feedbackDirection = if (deltaX > 0) 1 else -1  // 1 = clockwise, -1 = counter-clockwise
+                            feedbackAlpha = 1f
+                            feedbackLastUpdate = System.currentTimeMillis()
+                            feedbackTouchX = event.x
+                            feedbackTouchY = event.y
+                            invalidate()
                         }
-
-                        lastTrackpadDragX = event.x
-                        lastTrackpadDragY = event.y
-                        invalidate()
+                        DragMode.SELECTING -> {
+                            val deltaY = event.y - lastTrackpadDragY
+                            ringSelectionAccumulator += deltaY
+                            val threshold = 30f * resources.displayMetrics.density
+                            while (ringSelectionAccumulator > threshold && gameState.selectedRing > 1) {
+                                gameState.selectedRing--
+                                ringSelectionAccumulator -= threshold
+                            }
+                            while (ringSelectionAccumulator < -threshold && gameState.selectedRing < 8) {
+                                gameState.selectedRing++
+                                ringSelectionAccumulator += threshold
+                            }
+                            lastTrackpadDragY = event.y
+                            // Update feedback cue state
+                            feedbackMode = dragMode
+                            feedbackDirection = if (deltaY > 0) -1 else 1  // 1 = outer (up gesture), -1 = inner (down gesture)
+                            feedbackAlpha = 1f
+                            feedbackLastUpdate = System.currentTimeMillis()
+                            feedbackTouchX = event.x
+                            feedbackTouchY = event.y
+                            invalidate()
+                        }
+                        DragMode.NONE -> { /* waiting for threshold */ }
                     }
                     return true
                 }
@@ -985,12 +1125,13 @@ class GameView @JvmOverloads constructor(
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isButtonPressed) {
-                    if (!trackpadIsDragging) {
+                    if (dragMode == DragMode.NONE) {
                         // Tap = cycle to next ring (with wrap)
                         handleTrackpadTap()
                     }
                     isButtonPressed = false
-                    trackpadIsDragging = false
+                    dragMode = DragMode.NONE
+                    // Let feedback fade (don't reset feedbackMode immediately)
                     invalidate()
                     return true
                 }
@@ -1022,6 +1163,7 @@ class GameView @JvmOverloads constructor(
         winWaveProgress = 0f
 
         gameState.reset()
+        gameState.selectedRing = 1  // Auto-select ring 1
         buttonAlpha = 0f
 
         // Create shuffle sequence
@@ -1036,6 +1178,7 @@ class GameView @JvmOverloads constructor(
     private fun animateShuffle(moves: List<Pair<Int, Float>>, index: Int) {
         if (index >= moves.size) {
             gameState.isShuffling = false
+            gameState.selectedRing = 1  // Auto-select ring 1
             gameState.isButtonEnabled = true
 
             val fadeAnimator = ValueAnimator.ofFloat(0f, 1f)
