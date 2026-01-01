@@ -125,6 +125,7 @@ class GameView @JvmOverloads constructor(
 
     // Solver state
     private var isSolverRunning = false
+    @Volatile
     private var solverInterrupted = false
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -375,21 +376,35 @@ class GameView @JvmOverloads constructor(
             isAntiAlias = true
         }
 
-        val titleSize = 28f * resources.displayMetrics.density
-        val headerSize = 18f * resources.displayMetrics.density
-        val textSize = 16f * resources.displayMetrics.density
+        val isLandscape = width > height
+
+        val titleSize = (if (isLandscape) 22f else 28f) * resources.displayMetrics.density
+        val headerSize = (if (isLandscape) 14f else 18f) * resources.displayMetrics.density
+        val textSize = (if (isLandscape) 12f else 16f) * resources.displayMetrics.density
         val lineHeight = textSize * 1.7f
 
+        if (isLandscape) {
+            drawMenuLandscape(canvas, textPaint, titleSize, headerSize, textSize, lineHeight)
+        } else {
+            drawMenuPortrait(canvas, textPaint, titleSize, headerSize, textSize, lineHeight)
+        }
+    }
+
+    private fun drawMenuPortrait(
+        canvas: Canvas,
+        textPaint: Paint,
+        titleSize: Float,
+        headerSize: Float,
+        textSize: Float,
+        lineHeight: Float
+    ) {
         // Calculate available space above and below circles
         val circleTop = centerY - radii[8] - ringWidth
         val circleBottom = centerY + radii[8] + ringWidth
-        val topSpace = circleTop
-        val bottomSpace = height - circleBottom
 
         // ===== TOP SECTION =====
-        // Center content vertically in available space above circle
-        val topContentHeight = titleSize + lineHeight * 2.5f  // title + goal header + goal text
-        var y = (topSpace - topContentHeight) / 2f + titleSize
+        val topContentHeight = titleSize + lineHeight * 2.5f
+        var y = (circleTop - topContentHeight) / 2f + titleSize
 
         // Title
         textPaint.textSize = titleSize
@@ -412,9 +427,8 @@ class GameView @JvmOverloads constructor(
         canvas.drawText("Align all notches in a straight line", centerX, y, textPaint)
 
         // ===== BOTTOM SECTION =====
-        // Center content vertically in available space below circle
-        val bottomContentHeight = lineHeight * 7f  // headers + control lines + mechanics
-        y = circleBottom + (bottomSpace - bottomContentHeight) / 2f + headerSize
+        val bottomContentHeight = lineHeight * 7f
+        y = circleBottom + (height - circleBottom - bottomContentHeight) / 2f + headerSize
 
         // Controls header
         textPaint.textSize = headerSize
@@ -423,7 +437,7 @@ class GameView @JvmOverloads constructor(
         canvas.drawText("CONTROLS", centerX, y, textPaint)
         y += lineHeight
 
-        // Controls text with arrows
+        // Controls text
         textPaint.textSize = textSize
         textPaint.color = 0xFFFFFFFF.toInt()
         textPaint.typeface = Typeface.DEFAULT
@@ -448,6 +462,88 @@ class GameView @JvmOverloads constructor(
         canvas.drawText("Rotating a ring moves", centerX, y, textPaint)
         y += lineHeight
         canvas.drawText("adjacent rings at half speed", centerX, y, textPaint)
+    }
+
+    private fun drawMenuLandscape(
+        canvas: Canvas,
+        textPaint: Paint,
+        titleSize: Float,
+        headerSize: Float,
+        textSize: Float,
+        lineHeight: Float
+    ) {
+        // Calculate available space left and right of circles
+        val circleLeft = centerX - radii[8] - ringWidth
+        val circleRight = centerX + radii[8] + ringWidth
+        val leftCenterX = circleLeft / 2f
+        val rightCenterX = circleRight + (width - circleRight) / 2f
+
+        // ===== LEFT SECTION: Title + Goal =====
+        val leftContentHeight = titleSize + lineHeight * 3f
+        var y = (height - leftContentHeight) / 2f + titleSize
+
+        // Title
+        textPaint.textSize = titleSize
+        textPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+        textPaint.color = 0xFFFFFFFF.toInt()
+        canvas.drawText("LIXEN", leftCenterX, y, textPaint)
+        y += titleSize * 0.9f
+        canvas.drawText("PUZZLE", leftCenterX, y, textPaint)
+        y += lineHeight * 1.3f
+
+        // Goal header
+        textPaint.textSize = headerSize
+        textPaint.color = 0xFFFFFF00.toInt()
+        textPaint.typeface = Typeface.DEFAULT_BOLD
+        canvas.drawText("GOAL", leftCenterX, y, textPaint)
+        y += lineHeight
+
+        // Goal text (split for narrow space)
+        textPaint.textSize = textSize
+        textPaint.color = 0xFFFFFFFF.toInt()
+        textPaint.typeface = Typeface.DEFAULT
+        canvas.drawText("Align all notches", leftCenterX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("in a straight line", leftCenterX, y, textPaint)
+
+        // ===== RIGHT SECTION: Controls + Mechanics =====
+        val rightContentHeight = lineHeight * 9f
+        y = (height - rightContentHeight) / 2f + headerSize
+
+        // Controls header
+        textPaint.textSize = headerSize
+        textPaint.color = 0xFFFFFF00.toInt()
+        textPaint.typeface = Typeface.DEFAULT_BOLD
+        canvas.drawText("CONTROLS", rightCenterX, y, textPaint)
+        y += lineHeight
+
+        // Controls text
+        textPaint.textSize = textSize
+        textPaint.color = 0xFFFFFFFF.toInt()
+        textPaint.typeface = Typeface.DEFAULT
+        canvas.drawText("Tap: Select next ring ↻", rightCenterX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("Drag ←→: Rotate ring", rightCenterX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("Drag ↑↓: Select ring", rightCenterX, y, textPaint)
+        y += lineHeight * 1.3f
+
+        // Mechanics header
+        textPaint.textSize = headerSize
+        textPaint.color = 0xFFFFFF00.toInt()
+        textPaint.typeface = Typeface.DEFAULT_BOLD
+        canvas.drawText("MECHANICS", rightCenterX, y, textPaint)
+        y += lineHeight
+
+        // Mechanics text
+        textPaint.textSize = textSize
+        textPaint.color = 0xFFFFFFFF.toInt()
+        textPaint.typeface = Typeface.DEFAULT
+        canvas.drawText("Rotating a ring moves", rightCenterX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("adjacent rings", rightCenterX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("at half speed", rightCenterX, y, textPaint)
     }
 
     private fun isTouchingButton(x: Float, y: Float, bx: Float, by: Float, radius: Float): Boolean {
