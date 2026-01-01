@@ -125,6 +125,7 @@ class GameView @JvmOverloads constructor(
 
     // Solver state
     private var isSolverRunning = false
+    private var solverInterrupted = false
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -208,12 +209,21 @@ class GameView @JvmOverloads constructor(
         // Draw center circle (ring 0) - solid fill, no notch
         canvas.drawCircle(centerX, centerY, radii[0], centerCirclePaint)
 
-        // Draw ring number indicator in center (not a button)
-        if (gameState.isButtonEnabled) {
+        // Check win condition after solver or manual play
+        if (!gameState.isWon && !gameState.isShuffling && gameState.isButtonEnabled && checkWinConditionInternal()) {
+            gameState.isWon = true
+            gameState.isButtonEnabled = false  // Lock interaction
+            startWinAnimation()
+        }
+
+        // Draw ring indicator OR smiley on win
+        if (gameState.isWon && !isWinAnimating) {
+            drawWinSmiley(canvas)
+        } else if (gameState.isButtonEnabled && !gameState.isWon) {
             drawRingIndicator(canvas)
         }
 
-        // Check for win and trigger animation
+        // Check for win and trigger animation (backup check)
         if (gameState.isWon && !isWinAnimating && gameState.isButtonEnabled) {
             startWinAnimation()
         }
@@ -230,12 +240,14 @@ class GameView @JvmOverloads constructor(
 
         // Draw WIN text only after win animation completes
         if (gameState.isWon && !isWinAnimating) {
-            winTextPaint.textSize = 48f * resources.displayMetrics.density
+            winTextPaint.textSize = 36f * resources.displayMetrics.density
             winTextPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
-            canvas.drawText("SOLVED!", centerX, centerY, winTextPaint)
-            winTextPaint.textSize = 20f * resources.displayMetrics.density
+            winTextPaint.color = 0xFFFFFF00.toInt()
+            canvas.drawText("SOLVED!", centerX, centerY + radii[0] + 60f * resources.displayMetrics.density, winTextPaint)
+            winTextPaint.textSize = 18f * resources.displayMetrics.density
             winTextPaint.typeface = Typeface.DEFAULT
-            canvas.drawText("Press ↻ to play again", centerX, centerY + 40f * resources.displayMetrics.density, winTextPaint)
+            winTextPaint.color = 0xFFFFFFFF.toInt()
+            canvas.drawText("Press ↻ to play again", centerX, centerY + radii[0] + 90f * resources.displayMetrics.density, winTextPaint)
         }
 
         // Draw menu overlay last (on top of everything)
@@ -385,24 +397,12 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun drawMenuOverlay(canvas: Canvas) {
-        // Dim the entire screen
+        // Uniform dim across entire screen
         val dimPaint = Paint().apply {
-            color = 0xA0000000.toInt()
+            color = 0xC0000000.toInt()
             style = Paint.Style.FILL
         }
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
-
-        // Top panel background (above circles)
-        val topPanelBottom = centerY - radii[8] - ringWidth * 1.5f
-        val panelPaint = Paint().apply {
-            color = 0xE0202020.toInt()
-            style = Paint.Style.FILL
-        }
-        canvas.drawRect(0f, 0f, width.toFloat(), topPanelBottom, panelPaint)
-
-        // Bottom panel background (below circles)
-        val bottomPanelTop = centerY + radii[8] + ringWidth * 1.5f
-        canvas.drawRect(0f, bottomPanelTop, width.toFloat(), height.toFloat(), panelPaint)
 
         val textPaint = Paint().apply {
             color = 0xFFFFFFFF.toInt()
@@ -410,20 +410,28 @@ class GameView @JvmOverloads constructor(
             isAntiAlias = true
         }
 
-        val titleSize = 24f * resources.displayMetrics.density
-        val headerSize = 16f * resources.displayMetrics.density
-        val textSize = 14f * resources.displayMetrics.density
-        val lineHeight = textSize * 1.6f
+        val titleSize = 28f * resources.displayMetrics.density
+        val headerSize = 18f * resources.displayMetrics.density
+        val textSize = 16f * resources.displayMetrics.density
+        val lineHeight = textSize * 1.7f
 
-        // ===== TOP PANEL =====
-        var y = 40f * resources.displayMetrics.density
+        // Calculate available space above and below circles
+        val circleTop = centerY - radii[8] - ringWidth
+        val circleBottom = centerY + radii[8] + ringWidth
+        val topSpace = circleTop
+        val bottomSpace = height - circleBottom
+
+        // ===== TOP SECTION =====
+        // Center content vertically in available space above circle
+        val topContentHeight = titleSize + lineHeight * 2.5f  // title + goal header + goal text
+        var y = (topSpace - topContentHeight) / 2f + titleSize
 
         // Title
         textPaint.textSize = titleSize
         textPaint.typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         textPaint.color = 0xFFFFFFFF.toInt()
         canvas.drawText("LIXEN PUZZLE", centerX, y, textPaint)
-        y += lineHeight * 1.5f
+        y += lineHeight * 1.3f
 
         // Goal header
         textPaint.textSize = headerSize
@@ -438,8 +446,10 @@ class GameView @JvmOverloads constructor(
         textPaint.typeface = Typeface.DEFAULT
         canvas.drawText("Align all notches in a straight line", centerX, y, textPaint)
 
-        // ===== BOTTOM PANEL =====
-        y = bottomPanelTop + 30f * resources.displayMetrics.density
+        // ===== BOTTOM SECTION =====
+        // Center content vertically in available space below circle
+        val bottomContentHeight = lineHeight * 7f  // headers + control lines + mechanics
+        y = circleBottom + (bottomSpace - bottomContentHeight) / 2f + headerSize
 
         // Controls header
         textPaint.textSize = headerSize
@@ -448,21 +458,16 @@ class GameView @JvmOverloads constructor(
         canvas.drawText("CONTROLS", centerX, y, textPaint)
         y += lineHeight
 
-        // Controls text
+        // Controls text with arrows
         textPaint.textSize = textSize
         textPaint.color = 0xFFFFFFFF.toInt()
         textPaint.typeface = Typeface.DEFAULT
-        val controls = listOf(
-            "Tap: Select next ring",
-            "Drag ←→: Rotate selected ring",
-            "Drag ↑↓: Change ring"
-        )
-        for (line in controls) {
-            canvas.drawText(line, centerX, y, textPaint)
-            y += lineHeight
-        }
-
-        y += lineHeight * 0.3f
+        canvas.drawText("Tap: Select next ring ↻", centerX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("Drag ←→: Rotate ring", centerX, y, textPaint)
+        y += lineHeight
+        canvas.drawText("Drag ↑↓: Select outer/inner ring", centerX, y, textPaint)
+        y += lineHeight * 1.3f
 
         // Mechanics header
         textPaint.textSize = headerSize
@@ -475,9 +480,9 @@ class GameView @JvmOverloads constructor(
         textPaint.textSize = textSize
         textPaint.color = 0xFFFFFFFF.toInt()
         textPaint.typeface = Typeface.DEFAULT
-        canvas.drawText("Rotating a ring also rotates", centerX, y, textPaint)
+        canvas.drawText("Rotating a ring moves", centerX, y, textPaint)
         y += lineHeight
-        canvas.drawText("neighbors at half speed", centerX, y, textPaint)
+        canvas.drawText("adjacent rings at half speed", centerX, y, textPaint)
     }
 
     private fun isTouchingButton(x: Float, y: Float, bx: Float, by: Float, radius: Float): Boolean {
@@ -557,6 +562,7 @@ class GameView @JvmOverloads constructor(
     private fun runSolver() {
         if (isSolverRunning || isSolving || gameState.isShuffling || isWinAnimating) return
         isSolverRunning = true
+        solverInterrupted = false
         gameState.isButtonEnabled = false
         gameState.selectedRing = 0
         invalidate()
@@ -564,89 +570,91 @@ class GameView @JvmOverloads constructor(
         // Target: align all to 0° (top)
         val targetAngle = 0f
 
-        // Build sequence of moves
-        // Process from outermost (8) to innermost (1)
-        val solverMoves = calculateSolverMoves(targetAngle)
-
-        // Animate the solution
-        animateSolverMoves(solverMoves, 0)
+        // Start iterative solving
+        solveIteratively(targetAngle)
     }
 
-    private fun calculateSolverMoves(targetAngle: Float): List<Pair<Int, Float>> {
-        val moves = mutableListOf<Pair<Int, Float>>()
-
-        // Work on a copy of angles to simulate
-        val simAngles = gameState.angles.copyOf()
-
-        // Process rings from 8 down to 1
-        for (ring in 8 downTo 1) {
-            // Calculate how far this ring is from target
-            var diff = targetAngle - simAngles[ring]
-
-            // Normalize to -180..180
-            while (diff > 180f) diff -= 360f
-            while (diff < -180f) diff += 360f
-
-            // Skip if already aligned (within 1°)
-            if (kotlin.math.abs(diff) < 1f) continue
-
-            moves.add(ring to diff)
-
-            // Simulate the effect on our working copy
-            simAngles[ring] = normalizeAngle(simAngles[ring] + diff)
-            if (ring > 1) {
-                simAngles[ring - 1] = normalizeAngle(simAngles[ring - 1] + diff * 0.5f)
-            }
-            if (ring < 8) {
-                simAngles[ring + 1] = normalizeAngle(simAngles[ring + 1] + diff * 0.5f)
-            }
+    private fun solveIteratively(targetAngle: Float) {
+        if (solverInterrupted) {
+            finishSolver()
+            return
         }
 
-        // Second pass: fine-tune from inner to outer
+        // Check if already solved
+        if (checkWinConditionInternal()) {
+            gameState.isWon = true
+            finishSolver()
+            return
+        }
+
+        // Find the ring furthest from target
+        var maxDiff = 0f
+        var worstRing = -1
         for (ring in 1..8) {
-            var diff = targetAngle - simAngles[ring]
+            var diff = targetAngle - gameState.angles[ring]
             while (diff > 180f) diff -= 360f
             while (diff < -180f) diff += 360f
-
-            if (kotlin.math.abs(diff) < 1f) continue
-
-            moves.add(ring to diff)
-
-            simAngles[ring] = normalizeAngle(simAngles[ring] + diff)
-            if (ring > 1) {
-                simAngles[ring - 1] = normalizeAngle(simAngles[ring - 1] + diff * 0.5f)
-            }
-            if (ring < 8) {
-                simAngles[ring + 1] = normalizeAngle(simAngles[ring + 1] + diff * 0.5f)
+            if (kotlin.math.abs(diff) > maxDiff) {
+                maxDiff = kotlin.math.abs(diff)
+                worstRing = ring
             }
         }
 
-        // Third pass if needed (convergence)
-        for (pass in 1..3) {
-            var maxDiff = 0f
-            for (ring in 1..8) {
-                var diff = targetAngle - simAngles[ring]
-                while (diff > 180f) diff -= 360f
-                while (diff < -180f) diff += 360f
-                maxDiff = maxOf(maxDiff, kotlin.math.abs(diff))
-
-                if (kotlin.math.abs(diff) < 0.5f) continue
-
-                moves.add(ring to diff)
-
-                simAngles[ring] = normalizeAngle(simAngles[ring] + diff)
-                if (ring > 1) {
-                    simAngles[ring - 1] = normalizeAngle(simAngles[ring - 1] + diff * 0.5f)
-                }
-                if (ring < 8) {
-                    simAngles[ring + 1] = normalizeAngle(simAngles[ring + 1] + diff * 0.5f)
-                }
-            }
-            // If converged, stop
-            if (maxDiff < 1f) break
+        // If all rings within tolerance, we're done
+        if (maxDiff < 0.5f || worstRing == -1) {
+            gameState.checkWinCondition()
+            finishSolver()
+            return
         }
 
-        return moves
+        // Animate moving the worst ring toward target
+        var diff = targetAngle - gameState.angles[worstRing]
+        while (diff > 180f) diff -= 360f
+        while (diff < -180f) diff += 360f
+
+        gameState.selectedRing = worstRing
+
+        val duration = 150L
+        val startAngle = gameState.angles[worstRing]
+        val startInner = if (worstRing > 1) gameState.angles[worstRing - 1] else 0f
+        val startOuter = if (worstRing < 8) gameState.angles[worstRing + 1] else 0f
+
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            this.duration = duration
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener {
+                val progress = it.animatedValue as Float
+                val delta = diff * progress
+
+                gameState.angles[worstRing] = gameState.normalizeAngle(startAngle + delta)
+                if (worstRing > 1) {
+                    gameState.angles[worstRing - 1] = gameState.normalizeAngle(startInner + delta * 0.5f)
+                }
+                if (worstRing < 8) {
+                    gameState.angles[worstRing + 1] = gameState.normalizeAngle(startOuter + delta * 0.5f)
+                }
+                invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (!solverInterrupted && isAttachedToWindow) {
+                        postDelayed({ solveIteratively(targetAngle) }, 30)
+                    } else {
+                        finishSolver()
+                    }
+                }
+            })
+        }
+        animator.start()
+    }
+
+    private fun finishSolver() {
+        isSolverRunning = false
+        gameState.selectedRing = 0
+        if (!gameState.isWon) {
+            gameState.isButtonEnabled = true
+        }
+        invalidate()
     }
 
     private fun normalizeAngle(angle: Float): Float {
@@ -655,52 +663,60 @@ class GameView @JvmOverloads constructor(
         return a
     }
 
-    private fun animateSolverMoves(moves: List<Pair<Int, Float>>, index: Int) {
-        if (index >= moves.size) {
-            // Solver complete
-            isSolverRunning = false
-            gameState.isButtonEnabled = true
-            gameState.checkWinCondition()
-            invalidate()
-            return
-        }
+    private fun checkWinConditionInternal(): Boolean {
+        val notchSizes = floatArrayOf(0f, 75f, 60f, 50f, 42f, 35f, 30f, 26f, 22.5f)
 
-        val (ring, angle) = moves[index]
+        // Find the smallest notch (ring 8) - this is our limiting factor
+        // All other notch centers must be within range that ring 8's notch can cover
 
-        // Highlight the ring being moved
-        gameState.selectedRing = ring
+        // Use ring 8's position as reference
+        val refAngle = gameState.angles[8]
 
-        val duration = 200L  // Fast but visible
-        val startAngle = gameState.angles[ring]
-        val startInner = if (ring > 1) gameState.angles[ring - 1] else 0f
-        val startOuter = if (ring < 8) gameState.angles[ring + 1] else 0f
+        for (ring in 1..7) {
+            var diff = gameState.angles[ring] - refAngle
+            while (diff > 180f) diff -= 360f
+            while (diff < -180f) diff += 360f
 
-        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            this.duration = duration
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-            addUpdateListener {
-                val progress = it.animatedValue as Float
-                val delta = angle * progress
+            // The combined tolerance is half of ring's notch + half of ring 8's notch
+            val tolerance = (notchSizes[ring] + notchSizes[8]) / 2f
 
-                gameState.angles[ring] = gameState.normalizeAngle(startAngle + delta)
-                if (ring > 1) {
-                    gameState.angles[ring - 1] = gameState.normalizeAngle(startInner + delta * 0.5f)
-                }
-                if (ring < 8) {
-                    gameState.angles[ring + 1] = gameState.normalizeAngle(startOuter + delta * 0.5f)
-                }
-                invalidate()
+            if (kotlin.math.abs(diff) > tolerance) {
+                return false
             }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    // Small delay then next move
-                    postDelayed({
-                        animateSolverMoves(moves, index + 1)
-                    }, 50)
-                }
-            })
         }
-        animator.start()
+        return true
+    }
+
+    private fun drawWinSmiley(canvas: Canvas) {
+        val paint = Paint().apply {
+            color = 0xFFFFFF00.toInt()  // Yellow
+            style = Paint.Style.STROKE
+            strokeWidth = 4f * resources.displayMetrics.density
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        val size = radii[0] * 0.7f  // Fit within center circle
+
+        // Left eye
+        val eyeY = centerY - size * 0.15f
+        val eyeSpacing = size * 0.25f
+        val eyeRadius = size * 0.08f
+        paint.style = Paint.Style.FILL
+        canvas.drawCircle(centerX - eyeSpacing, eyeY, eyeRadius, paint)
+
+        // Right eye
+        canvas.drawCircle(centerX + eyeSpacing, eyeY, eyeRadius, paint)
+
+        // Smile (arc)
+        paint.style = Paint.Style.STROKE
+        val smileRect = RectF(
+            centerX - size * 0.35f,
+            centerY - size * 0.1f,
+            centerX + size * 0.35f,
+            centerY + size * 0.4f
+        )
+        canvas.drawArc(smileRect, 20f, 140f, false, paint)
     }
 
     private fun startWinAnimation() {
@@ -780,6 +796,12 @@ class GameView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // Interrupt solver if running
+                if (isSolverRunning) {
+                    solverInterrupted = true
+                    return true
+                }
+
                 // Check menu overlay tap (close it)
                 if (showMenu) {
                     showMenu = false
@@ -806,6 +828,11 @@ class GameView @JvmOverloads constructor(
                         runSolver()
                         return true
                     }
+                }
+
+                // Block all gameplay interaction if won (only allow reset button handled above)
+                if (gameState.isWon) {
+                    return true
                 }
 
                 // Block input during animations
