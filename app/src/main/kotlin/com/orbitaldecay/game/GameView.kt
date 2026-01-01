@@ -96,6 +96,20 @@ class GameView @JvmOverloads constructor(
     private var lastDragX = 0f
     private var isDragging = false
 
+    // Trackpad dimensions
+    private var trackpadCenterX = 0f
+    private var trackpadCenterY = 0f
+    private var trackpadArmLength = 0f  // Length of each arm
+    private var trackpadArmWidth = 0f   // Width of each arm
+
+    // Trackpad touch handling
+    private var trackpadTouchStartX = 0f
+    private var trackpadTouchStartY = 0f
+    private var trackpadIsDragging = false
+    private var lastTrackpadDragX = 0f
+    private var lastTrackpadDragY = 0f
+    private var ringSelectionAccumulator = 0f  // For smooth ring switching
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
 
@@ -119,6 +133,14 @@ class GameView @JvmOverloads constructor(
 
         buttonRadius = radii[0] * BUTTON_RADIUS_RATIO
         ringPaint.strokeWidth = ringWidth
+
+        // Position trackpad below circles
+        val circleBottom = centerY + radii[8] + ringWidth  // Bottom of outermost ring
+        val availableSpace = h - circleBottom
+        trackpadCenterY = circleBottom + availableSpace / 2f
+        trackpadCenterX = centerX
+        trackpadArmLength = min(availableSpace * 0.35f, 80f * resources.displayMetrics.density)
+        trackpadArmWidth = trackpadArmLength * 0.5f
 
         // Start game after geometry is ready (first layout only)
         if (oldw == 0 && oldh == 0) {
@@ -148,15 +170,22 @@ class GameView @JvmOverloads constructor(
         // Draw center circle (ring 0) - solid fill, no notch
         canvas.drawCircle(centerX, centerY, radii[0], centerCirclePaint)
 
-        // Draw button if enabled or fading in
+        // Draw ring number indicator in center (not a button)
+        if (gameState.isButtonEnabled) {
+            drawRingIndicator(canvas)
+        }
+
+        // Draw trackpad at bottom
         if (gameState.isButtonEnabled || buttonAlpha > 0f) {
-            drawButton(canvas, isButtonPressed)
+            drawTrackpad(canvas)
         }
 
         // Draw WIN text if game is won
         if (gameState.isWon) {
-            winTextPaint.textSize = 80f * resources.displayMetrics.density
-            canvas.drawText("SOLVED", centerX, centerY - 30f * resources.displayMetrics.density, winTextPaint)
+            winTextPaint.textSize = 60f * resources.displayMetrics.density
+            canvas.drawText("SOLVED", centerX, centerY - radii[8] - 40f * resources.displayMetrics.density, winTextPaint)
+            winTextPaint.textSize = 30f * resources.displayMetrics.density
+            canvas.drawText("Tap to restart", trackpadCenterX, trackpadCenterY, winTextPaint)
         }
     }
 
@@ -202,7 +231,19 @@ class GameView @JvmOverloads constructor(
             centerY + radius
         )
         val notchAngle = gameState.angles[index]
-        val notchSize = 15f
+        // Inner rings need larger angular gaps to be visible
+        // Ring 1: 75° gap, Ring 8: 22.5° gap
+        val notchSize = when (index) {
+            1 -> 75f
+            2 -> 60f
+            3 -> 50f
+            4 -> 42f
+            5 -> 35f
+            6 -> 30f
+            7 -> 26f
+            8 -> 22.5f
+            else -> 30f
+        }
         val startAngle = notchAngle + notchSize / 2f - 90f // -90 to start from top
         val sweepAngle = 360f - notchSize
 
@@ -271,6 +312,90 @@ class GameView @JvmOverloads constructor(
         }
     }
 
+    private fun drawTrackpad(canvas: Canvas) {
+        // Base color with 3D effect
+        val trackpadPaint = Paint().apply {
+            color = 0xFF404040.toInt()
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+
+        // Horizontal arm (left-right for rotation)
+        val hRect = RectF(
+            trackpadCenterX - trackpadArmLength,
+            trackpadCenterY - trackpadArmWidth / 2f,
+            trackpadCenterX + trackpadArmLength,
+            trackpadCenterY + trackpadArmWidth / 2f
+        )
+        canvas.drawRoundRect(hRect, trackpadArmWidth / 2f, trackpadArmWidth / 2f, trackpadPaint)
+
+        // Vertical arm (up-down for ring selection)
+        val vRect = RectF(
+            trackpadCenterX - trackpadArmWidth / 2f,
+            trackpadCenterY - trackpadArmLength,
+            trackpadCenterX + trackpadArmWidth / 2f,
+            trackpadCenterY + trackpadArmLength
+        )
+        canvas.drawRoundRect(vRect, trackpadArmWidth / 2f, trackpadArmWidth / 2f, trackpadPaint)
+
+        // Center circle (tap area)
+        canvas.drawCircle(trackpadCenterX, trackpadCenterY, trackpadArmWidth * 0.6f, trackpadPaint.apply {
+            color = 0xFF505050.toInt()
+        })
+
+        // Arrow indicators
+        drawTrackpadArrows(canvas)
+    }
+
+    private fun drawTrackpadArrows(canvas: Canvas) {
+        val arrowPaint = Paint().apply {
+            color = 0xFF808080.toInt()
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+        val arrowSize = trackpadArmWidth * 0.25f
+
+        // Left arrow (rotate CCW)
+        drawTriangle(canvas, trackpadCenterX - trackpadArmLength + arrowSize * 2, trackpadCenterY, arrowSize, 180f, arrowPaint)
+        // Right arrow (rotate CW)
+        drawTriangle(canvas, trackpadCenterX + trackpadArmLength - arrowSize * 2, trackpadCenterY, arrowSize, 0f, arrowPaint)
+        // Up arrow (higher ring)
+        drawTriangle(canvas, trackpadCenterX, trackpadCenterY - trackpadArmLength + arrowSize * 2, arrowSize, 270f, arrowPaint)
+        // Down arrow (lower ring)
+        drawTriangle(canvas, trackpadCenterX, trackpadCenterY + trackpadArmLength - arrowSize * 2, arrowSize, 90f, arrowPaint)
+    }
+
+    private fun drawTriangle(canvas: Canvas, cx: Float, cy: Float, size: Float, rotation: Float, paint: Paint) {
+        val path = android.graphics.Path()
+        path.moveTo(cx + size, cy)
+        path.lineTo(cx - size / 2f, cy - size * 0.866f)
+        path.lineTo(cx - size / 2f, cy + size * 0.866f)
+        path.close()
+
+        canvas.save()
+        canvas.rotate(rotation, cx, cy)
+        canvas.drawPath(path, paint)
+        canvas.restore()
+    }
+
+    private fun drawRingIndicator(canvas: Canvas) {
+        if (gameState.selectedRing == 0) return
+
+        val indicatorPaint = Paint().apply {
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+            textSize = radii[0] * 1.2f  // Larger text
+            color = if (gameState.selectedRing in 1..7) {
+                rainbowColors[gameState.selectedRing - 1]
+            } else {
+                0xFFB0B0B0.toInt()  // Gray for ring 8
+            }
+        }
+
+        val textY = centerY - (indicatorPaint.descent() + indicatorPaint.ascent()) / 2f
+        canvas.drawText(gameState.selectedRing.toString(), centerX, textY, indicatorPaint)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!gameState.isButtonEnabled || gameState.isShuffling) {
             return super.onTouchEvent(event)
@@ -278,12 +403,14 @@ class GameView @JvmOverloads constructor(
 
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                if (isTouchingButton(event.x, event.y)) {
+                if (isTouchingTrackpad(event.x, event.y)) {
                     isButtonPressed = true
-                    touchStartX = event.x
-                    touchStartY = event.y
-                    lastDragX = event.x
-                    isDragging = false
+                    trackpadTouchStartX = event.x
+                    trackpadTouchStartY = event.y
+                    lastTrackpadDragX = event.x
+                    lastTrackpadDragY = event.y
+                    trackpadIsDragging = false
+                    ringSelectionAccumulator = 0f
                     invalidate()
                     return true
                 }
@@ -291,21 +418,41 @@ class GameView @JvmOverloads constructor(
 
             MotionEvent.ACTION_MOVE -> {
                 if (isButtonPressed) {
-                    val dx = event.x - touchStartX
-                    val dy = event.y - touchStartY
+                    val dx = event.x - trackpadTouchStartX
+                    val dy = event.y - trackpadTouchStartY
                     val distance = sqrt(dx.pow(2) + dy.pow(2))
 
-                    // If moved more than 10dp, it's a drag
                     if (distance > 10f * resources.displayMetrics.density) {
-                        isDragging = true
+                        trackpadIsDragging = true
                     }
 
-                    // Handle horizontal drag for rotation
-                    if (isDragging && gameState.selectedRing > 0) {
-                        val deltaX = event.x - lastDragX
+                    if (trackpadIsDragging && gameState.selectedRing > 0) {
+                        // Horizontal drag = rotation
+                        val deltaX = event.x - lastTrackpadDragX
                         val rotationAngle = deltaX * DRAG_SENSITIVITY
                         gameState.applyMove(gameState.selectedRing, rotationAngle)
-                        lastDragX = event.x
+
+                        // Vertical drag = ring selection (with threshold)
+                        val deltaY = event.y - lastTrackpadDragY
+                        ringSelectionAccumulator += deltaY
+
+                        val threshold = 30f * resources.displayMetrics.density
+                        if (ringSelectionAccumulator > threshold) {
+                            // Drag down = select lower ring number (toward center)
+                            if (gameState.selectedRing > 1) {
+                                gameState.selectedRing--
+                            }
+                            ringSelectionAccumulator = 0f
+                        } else if (ringSelectionAccumulator < -threshold) {
+                            // Drag up = select higher ring number (toward outside)
+                            if (gameState.selectedRing < 8) {
+                                gameState.selectedRing++
+                            }
+                            ringSelectionAccumulator = 0f
+                        }
+
+                        lastTrackpadDragX = event.x
+                        lastTrackpadDragY = event.y
                         invalidate()
                     }
                     return true
@@ -314,12 +461,12 @@ class GameView @JvmOverloads constructor(
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isButtonPressed) {
-                    if (!isDragging) {
-                        // It's a tap
-                        handleButtonTap()
+                    if (!trackpadIsDragging) {
+                        // Tap = cycle to next ring (with wrap)
+                        handleTrackpadTap()
                     }
                     isButtonPressed = false
-                    isDragging = false
+                    trackpadIsDragging = false
                     invalidate()
                     return true
                 }
@@ -329,27 +476,29 @@ class GameView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
-    private fun isTouchingButton(x: Float, y: Float): Boolean {
-        val dx = x - centerX
-        val dy = y - centerY
-        val distance = sqrt(dx.pow(2) + dy.pow(2))
-        return distance <= buttonRadius
+    private fun isTouchingTrackpad(x: Float, y: Float): Boolean {
+        // Check if within trackpad bounds (+ shape bounding box)
+        val inHorizontal = y >= trackpadCenterY - trackpadArmWidth / 2f &&
+                           y <= trackpadCenterY + trackpadArmWidth / 2f &&
+                           x >= trackpadCenterX - trackpadArmLength &&
+                           x <= trackpadCenterX + trackpadArmLength
+        val inVertical = x >= trackpadCenterX - trackpadArmWidth / 2f &&
+                         x <= trackpadCenterX + trackpadArmWidth / 2f &&
+                         y >= trackpadCenterY - trackpadArmLength &&
+                         y <= trackpadCenterY + trackpadArmLength
+        return inHorizontal || inVertical
     }
 
-    private fun handleButtonTap() {
+    private fun handleTrackpadTap() {
         if (gameState.isWon) {
-            // Restart game
             startGame()
         } else {
-            // Cycle to next ring (1→2→3→...→8→1)
-            gameState.selectedRing = if (gameState.selectedRing == 0) {
-                1
-            } else if (gameState.selectedRing == 8) {
+            // Cycle rings 1→2→3→...→8→1
+            gameState.selectedRing = if (gameState.selectedRing == 0 || gameState.selectedRing == 8) {
                 1
             } else {
                 gameState.selectedRing + 1
             }
-            invalidate()
         }
     }
 
