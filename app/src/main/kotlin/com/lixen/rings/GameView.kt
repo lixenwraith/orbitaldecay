@@ -1083,9 +1083,12 @@ class GameView @JvmOverloads constructor(
                             val deltaX = event.x - lastTrackpadDragX
                             gameState.applyMove(gameState.selectedRing, deltaX * DRAG_SENSITIVITY)
                             lastTrackpadDragX = event.x
-                            // Update feedback cue state
+                            // Update feedback cue state (with hysteresis to prevent flicker)
                             feedbackMode = dragMode
-                            feedbackDirection = if (deltaX > 0) 1 else -1  // 1 = clockwise, -1 = counter-clockwise
+                            val minDelta = 2f * resources.displayMetrics.density
+                            if (abs(deltaX) > minDelta) {
+                                feedbackDirection = if (deltaX > 0) 1 else -1  // 1 = clockwise, -1 = counter-clockwise
+                            }
                             feedbackAlpha = 1f
                             feedbackLastUpdate = System.currentTimeMillis()
                             feedbackTouchX = event.x
@@ -1105,9 +1108,12 @@ class GameView @JvmOverloads constructor(
                                 ringSelectionAccumulator += threshold
                             }
                             lastTrackpadDragY = event.y
-                            // Update feedback cue state
+                            // Update feedback cue state (with hysteresis to prevent flicker)
                             feedbackMode = dragMode
-                            feedbackDirection = if (deltaY > 0) -1 else 1  // 1 = outer (up gesture), -1 = inner (down gesture)
+                            val minDelta = 2f * resources.displayMetrics.density
+                            if (abs(deltaY) > minDelta) {
+                                feedbackDirection = if (deltaY > 0) -1 else 1  // 1 = outer (up gesture), -1 = inner (down gesture)
+                            }
                             feedbackAlpha = 1f
                             feedbackLastUpdate = System.currentTimeMillis()
                             feedbackTouchX = event.x
